@@ -4,64 +4,55 @@ use quinn::{ClientConfig, Endpoint};
 use rustls::RootCertStore;
 use tracing::debug;
 use std::{
-    error::Error, fs, net::SocketAddr, net::ToSocketAddrs, path::PathBuf, sync::Arc,
+    error::Error, fs, net::SocketAddr, path::PathBuf, sync::Arc,
     time::Instant,
 };
 use url::Url;
 
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
-/// Constructs a QUIC endpoint configured for use a client only.
-///
-/// ## Args
-///
-/// - server_certs: list of trusted certificates.
-pub fn make_client_endpoint(
-    bind_addr: SocketAddr,
-    server_certs: &[&[u8]],
-) -> Result<Endpoint, Box<dyn Error>> {
-    let client_cfg = configure_client(server_certs)?;
-    let mut endpoint = Endpoint::client(bind_addr)?;
-    endpoint.set_default_client_config(client_cfg);
-    Ok(endpoint)
-}
-
-/// Builds default quinn client config and trusts given certificates.
-///
-/// ## Args
-///
-/// - server_certs: a list of trusted certificates in DER format.
-fn configure_client(server_certs: &[&[u8]]) -> Result<ClientConfig, Box<dyn Error>> {
-    let mut certs = rustls::RootCertStore::empty();
-    for cert in server_certs {
-        certs.add(&rustls::Certificate(cert.to_vec()))?;
-    }
-
-    let client_config = ClientConfig::with_root_certificates(certs);
-    Ok(client_config)
-}
 
 /// Connects to a QUIC server.
 ///
 /// ## Args
 ///
 /// - opt: command line options.
-pub async fn connect(opt: &Opt, roots: &RootCertStore) -> Result<quinn::Connection> {
-    // let remote = opt
-    //     .url
-    //     .to_string()
-    //     .to_socket_addrs()?
-    //     .next()
-    //     .ok_or_else(|| anyhow!("couldn't resolve to an address"))?;
+pub async fn connect(opt: &Opt) -> Result<quinn::Connection> {
+    let remote = opt
+        .url
+        .socket_addrs(|| Some(443))?
+        .first()
+        .ok_or_else(|| anyhow!("couldn't resolve to an address"))?.to_owned();
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add_trust_anchors(
+        webpki_roots::TLS_SERVER_ROOTS
+            .iter()
+            .map(|ta| {
+                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            })
+    );
     let mut client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
-        .with_root_certificates(roots.clone())
+        .with_root_certificates(root_store)
         .with_no_client_auth();
-    client_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
+
+    let alpn: Vec<Vec<u8>> = vec![
+        b"h3".to_vec(),
+        b"h3-32".to_vec(),
+        b"h3-31".to_vec(),
+        b"h3-30".to_vec(),
+        b"h3-29".to_vec(),
+    ];
+    client_crypto.alpn_protocols = alpn;
     if opt.keylog {
         client_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
     }
     let client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
+    
     let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap())?;
     endpoint.set_default_client_config(client_config);
     let start = Instant::now();
@@ -100,7 +91,6 @@ pub struct Opt {
 
 pub struct Client {
     options: Opt,
-    roots: RootCertStore,
     connection: Option<quinn::Connection>,
 }
 
@@ -111,19 +101,14 @@ impl Client {
     ///
     /// - options: command line options.
     pub fn new(options: Opt) -> Result<Client> {
-        let mut roots = rustls::RootCertStore::empty();
-        if let Some(ca_path) = &options.ca {
-            roots.add(&rustls::Certificate(fs::read(ca_path)?))?;
-        }
         Ok(Client {
             options,
-            roots,
             connection: None,
         })
     }
 
     pub async fn connect(&mut self) -> Result<()> {
-        let conn = connect(&self.options, &self.roots).await?;
+        let conn = connect(&self.options).await?;
         self.connection = Some(conn);
         debug!("connected to server {}", self.options.url);
         Ok(())
