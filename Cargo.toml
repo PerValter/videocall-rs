@@ -1,9 +1,10 @@
 [workspace]
-
+resolver = "2"
 members = [
     "actix-api",
     "bot",
     "src-tauri",
     "types",
+    "video-daemon",
     "yew-ui"
 ]
