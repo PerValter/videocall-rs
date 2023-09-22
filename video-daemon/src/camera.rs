@@ -5,22 +5,29 @@ use futures_util::{SinkExt, StreamExt};
 use image::codecs;
 use image::ImageBuffer;
 use image::Rgb;
-use nokhwa::Buffer;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::RequestedFormat;
 use nokhwa::utils::RequestedFormatType;
-use tracing::{debug, info, warn, error};
-use nokhwa::{Camera, utils::{CameraFormat, CameraIndex, FrameFormat, ApiBackend}};
+use nokhwa::Buffer;
+use nokhwa::{
+    utils::{ApiBackend, CameraFormat, CameraIndex, FrameFormat},
+    Camera,
+};
+use protobuf::Message;
 use rav1e::prelude::ChromaSampling;
 use rav1e::*;
 use rav1e::{config::SpeedSettings, prelude::FrameType};
 use serde::{Deserialize, Serialize};
-use types::protos::media_packet::MediaPacket;
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, thread};
+use tracing::{debug, error, info, warn};
+use types::protos::media_packet;
+use types::protos::media_packet::media_packet::MediaType;
+use types::protos::media_packet::{MediaPacket, VideoMetadata};
+use types::protos::packet_wrapper::{packet_wrapper::PacketType, PacketWrapper};
 
 type CameraPacket = (Buffer, u128);
 
@@ -51,9 +58,37 @@ impl FromStr for Encoder {
     }
 }
 
+pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
+    let frame_type = if chunk.frame_type == FrameType::KEY {
+        "key".to_string()
+    } else {
+        "delta".to_string()
+    };
+    let mut media_packet: MediaPacket = MediaPacket {
+        data: chunk.data.clone(),
+        frame_type,
+        email: email.to_owned(),
+        media_type: MediaType::VIDEO.into(),
+        timestamp: since_the_epoch().as_micros() as f64,
+        video_metadata: Some(VideoMetadata {
+            sequence: chunk.input_frameno,
+            ..Default::default()
+        })
+        .into(),
+        ..Default::default()
+    };
+    let data = media_packet.write_to_bytes().unwrap();
+    PacketWrapper {
+        data,
+        email: media_packet.email,
+        packet_type: PacketType::MEDIA.into(),
+        ..Default::default()
+    }
+}
+
 static THRESHOLD_MILLIS: u128 = 1000;
 
-async fn start(tx: Sender<MediaPacket>) -> Result<()> {
+pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     let mut enc = EncoderConfig::default();
     let width = 640;
     let height = 480;
@@ -88,10 +123,6 @@ async fn start(tx: Sender<MediaPacket>) -> Result<()> {
 
     let bus: Arc<Mutex<Bus<String>>> = Arc::new(Mutex::new(bus::Bus::new(10)));
     let bus_copy = bus.clone();
-  
-
-    let client_counter: Arc<Mutex<u16>> = Arc::new(Mutex::new(0));
-    let web_socket_counter = client_counter.clone();
 
     let cfg = Config::new().with_encoder_config(enc).with_threads(4);
 
@@ -125,37 +156,23 @@ async fn start(tx: Sender<MediaPacket>) -> Result<()> {
         }
     });
 
-    let camera_thread = thread::spawn(move || {
-        loop {
-            {
-                info!("waiting for browser...");
-                thread::sleep(Duration::from_millis(200));
-                let counter = client_counter.lock().unwrap();
-                if *counter == 0 {
-                    continue;
-                }
-            }
-            let mut camera = Camera::new(
-                CameraIndex::Index(video_device_index as u32),
-                RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest((CameraFormat::new_from(
+    let camera_thread = thread::spawn(move || loop {
+        let mut camera = Camera::new(
+            CameraIndex::Index(video_device_index as u32),
+            RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
+                (CameraFormat::new_from(
                     width as u32,
                     height as u32,
                     FrameFormat::MJPEG,
                     framerate,
-                ))))
-            )
-            .unwrap();
-            camera.open_stream().unwrap();
-            loop {
-                {
-                    let counter = client_counter.lock().unwrap();
-                    if *counter == 0 {
-                        break;
-                    }
-                }
-                let frame = camera.frame().unwrap();
-                cam_tx.send((frame, since_the_epoch().as_millis()));
-            }
+                )),
+            )),
+        )
+        .unwrap();
+        camera.open_stream().unwrap();
+        loop {
+            let frame = camera.frame().unwrap();
+            cam_tx.send((frame, since_the_epoch().as_millis()));
         }
     });
 
@@ -223,29 +240,12 @@ async fn start(tx: Sender<MediaPacket>) -> Result<()> {
                 debug!("receiving encoded frame");
                 match ctx.receive_packet() {
                     Ok(pkt) => {
-
-                        // TODO: Use the protobuf types
-
                         debug!("time encoding {:?}", encoding_time.elapsed());
-                        debug!("read thread: base64 Encoding packet {}", pkt.input_frameno);
-                        let frame_type = if pkt.frame_type == FrameType::KEY {
-                            "key"
-                        } else {
-                            "delta"
-                        };
-                        let time_serializing = Instant::now();
-                        let data = encode(pkt.data);
-                        debug!("read thread: base64 Encoded packet {}", pkt.input_frameno);
-                        let frame = VideoPacket {
-                            data: Some(data),
-                            frameType: Some(frame_type.to_string()),
-                            epochTime: since_the_epoch(),
-                            encoding: encoder.clone(),
-                        };
-                        let json = serde_json::to_string(&frame).unwrap();
-                        bus_copy.lock().unwrap().broadcast(json);
-                        debug!("time serializing {:?}", time_serializing.elapsed());
+                        let packet_wrapper = transform_video_chunk(&pkt, "test");
                         fps_tx_copy.send(since_the_epoch().as_millis()).unwrap();
+                        if let Err(e) = quic_tx.send(packet_wrapper.write_to_bytes().unwrap()) {
+                            error!("Unable to send packet: {:?}", e);
+                        }
                     }
                     Err(e) => match e {
                         EncoderStatus::LimitReached => {

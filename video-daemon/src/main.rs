@@ -1,4 +1,7 @@
 use clap::Parser;
+use rustls::quic;
+use std::sync::mpsc::channel;
+use video_daemon::camera;
 use video_daemon::quic::{Client, Opt};
 
 #[tokio::main]
@@ -12,13 +15,11 @@ async fn main() {
     let opt = Opt::parse();
     let mut client = Client::new(opt).expect("failed to create client");
     client.connect().await.expect("failed to connect");
-    let code = {
-        if let Err(e) = client.send(b"Hello world").await {
-            eprintln!("ERROR: {e}");
-            1
-        } else {
-            0
-        }
-    };
-    ::std::process::exit(code);
+    let (quic_tx, quic_rx) = channel::<Vec<u8>>();
+    let camera_task = tokio::spawn(async {
+        camera::start(quic_tx).await;
+    });
+    while let Ok(data) = quic_rx.recv() {
+        client.send(&data).await.expect("failed to send");
+    }
 }

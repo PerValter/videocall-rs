@@ -13,7 +13,7 @@ clap = { version = "4.0.32", features = ["derive"] }
 directories-next = "2.0.0"
 futures-util = { version = "0.3.28", features = ["sink"] }
 image = "0.24.7"
-nokhwa = "0.10.4"
+nokhwa = { version = "0.10.4", features = ["input-native"] }
 protobuf = "3.2.0"
 quinn = "0.10.2"
 rav1e = "0.6.6"

@@ -2,13 +2,9 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use quinn::{ClientConfig, Endpoint};
 use rustls::RootCertStore;
+use std::{error::Error, fs, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 use tracing::{debug, info};
-use std::{
-    error::Error, fs, net::SocketAddr, path::PathBuf, sync::Arc,
-    time::Instant,
-};
 use url::Url;
-
 
 /// Connects to a QUIC server.
 ///
@@ -20,19 +16,16 @@ pub async fn connect(opt: &Opt) -> Result<quinn::Connection> {
         .url
         .socket_addrs(|| Some(443))?
         .first()
-        .ok_or_else(|| anyhow!("couldn't resolve to an address"))?.to_owned();
+        .ok_or_else(|| anyhow!("couldn't resolve to an address"))?
+        .to_owned();
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add_trust_anchors(
-        webpki_roots::TLS_SERVER_ROOTS
-            .iter()
-            .map(|ta| {
-                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            })
-    );
+    root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
     let mut client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(root_store)
@@ -44,7 +37,7 @@ pub async fn connect(opt: &Opt) -> Result<quinn::Connection> {
         client_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
     }
     let client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
-    
+
     let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap())?;
     endpoint.set_default_client_config(client_config);
     let start = Instant::now();
@@ -107,7 +100,10 @@ impl Client {
     }
 
     pub async fn send(&mut self, data: &[u8]) -> Result<()> {
-        let conn = self.connection.as_mut().ok_or_else(|| anyhow!("not connected"))?;
+        let conn = self
+            .connection
+            .as_mut()
+            .ok_or_else(|| anyhow!("not connected"))?;
         let mut stream = conn.open_uni().await?;
         stream.write_all(data).await?;
         stream.finish().await?;
