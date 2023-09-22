@@ -7,12 +7,22 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75"
-clap = { version = "4.4.4", features = ["derive"] }
+base64 = "0.21.4"
+bus = "2.4.1"
+clap = { version = "4.0.32", features = ["derive"] }
 directories-next = "2.0.0"
+futures-util = { version = "0.3.28", features = ["sink"] }
+image = "0.24.7"
+nokhwa = "0.10.4"
+protobuf = "3.2.0"
 quinn = "0.10.2"
+rav1e = "0.6.6"
 rustls = { version = "0.21.7", features = ["dangerous_configuration"] }
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
 tokio = { version = "1.32.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
 url = "2.4.1"
 webpki-roots = "0.25.2"
+types = { path= "../types"}
