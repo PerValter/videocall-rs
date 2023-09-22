@@ -2,14 +2,12 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use quinn::{ClientConfig, Endpoint};
 use rustls::RootCertStore;
-use tracing::debug;
+use tracing::{debug, info};
 use std::{
     error::Error, fs, net::SocketAddr, path::PathBuf, sync::Arc,
     time::Instant,
 };
 use url::Url;
-
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
 
 /// Connects to a QUIC server.
@@ -40,13 +38,7 @@ pub async fn connect(opt: &Opt) -> Result<quinn::Connection> {
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
-    let alpn: Vec<Vec<u8>> = vec![
-        b"h3".to_vec(),
-        b"h3-32".to_vec(),
-        b"h3-31".to_vec(),
-        b"h3-30".to_vec(),
-        b"h3-29".to_vec(),
-    ];
+    let alpn = vec![b"hq-29".to_vec()];
     client_crypto.alpn_protocols = alpn;
     if opt.keylog {
         client_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
@@ -61,12 +53,12 @@ pub async fn connect(opt: &Opt) -> Result<quinn::Connection> {
         .as_ref()
         .map_or_else(|| opt.url.host_str(), |x| Some(x))
         .ok_or_else(|| anyhow!("no hostname specified"))?;
-    eprintln!("connecting to {host} at {remote}");
+    info!("connecting to {host} at {remote}");
     let conn = endpoint
         .connect(remote, host)?
         .await
         .map_err(|e| anyhow!("failed to connect: {}", e))?;
-    eprintln!("connected at {:?}", start.elapsed());
+    info!("connected at {:?}", start.elapsed());
     Ok(conn)
 }
 
@@ -114,17 +106,12 @@ impl Client {
         Ok(())
     }
 
-    pub async fn run(&self) -> Result<()> {
-        if let Some(conn) = &self.connection {
-            let (mut send, _recv) = conn
-                .open_bi()
-                .await
-                .map_err(|e| anyhow!("failed to open stream: {}", e))?;
-            send.finish()
-                .await
-                .map_err(|e| anyhow!("failed to shutdown stream: {}", e))?;
-        }
-
+    pub async fn send(&mut self, data: &[u8]) -> Result<()> {
+        let conn = self.connection.as_mut().ok_or_else(|| anyhow!("not connected"))?;
+        let mut stream = conn.open_uni().await?;
+        stream.write_all(data).await?;
+        stream.finish().await?;
+        debug!("sent {} bytes", data.len());
         Ok(())
     }
 }

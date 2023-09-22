@@ -1,5 +1,5 @@
 use clap::Parser;
-use video_daemon::client::{Client, Opt};
+use video_daemon::quic::{Client, Opt};
 
 #[tokio::main]
 async fn main() {
@@ -13,7 +13,7 @@ async fn main() {
     let mut client = Client::new(opt).expect("failed to create client");
     client.connect().await.expect("failed to connect");
     let code = {
-        if let Err(e) = client.run().await {
+        if let Err(e) = client.send(b"Hello world").await {
             eprintln!("ERROR: {e}");
             1
         } else {
