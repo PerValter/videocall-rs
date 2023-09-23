@@ -403,8 +403,7 @@ impl Component for AttendantsComponent {
             .sorted_keys()
             .iter()
             .map(|key| {
-                if !USERS_ALLOWED_TO_STREAM.iter().any(|host| host == key)
-                    && USERS_ALLOWED_TO_STREAM.to_vec().len() != 0
+                if USERS_ALLOWED_TO_STREAM.len() != 0 && !USERS_ALLOWED_TO_STREAM.iter().any(|host| host == key)
                 {
                     return html! {};
                 }
@@ -456,7 +455,7 @@ impl Component for AttendantsComponent {
                 { self.error.as_ref().map(|error| html! { <p>{ error }</p> }) }
                 { rows }
                 {
-                    if USERS_ALLOWED_TO_STREAM.iter().any(|host| host == &email) || USERS_ALLOWED_TO_STREAM.to_vec().len() == 0 {
+                    if USERS_ALLOWED_TO_STREAM.len() == 0 || USERS_ALLOWED_TO_STREAM.iter().any(|host| host == &email) {
                         html! {
                             <nav class="host">
                                 <div class="controls">

@@ -39,6 +39,9 @@ pub fn truthy(s: Option<&str>) -> bool {
 }
 pub fn split_users(s: Option<&str>) -> Vec<String> {
     if let Some(s) = s {
+        if s.len() < 3 {
+            return Vec::new();
+        }
         s.split(',').map(|s| s.to_string()).collect()
     } else {
         Vec::new()
