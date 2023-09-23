@@ -110,7 +110,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     enc.height = height;
     enc.bit_depth = 8;
     enc.error_resilient = true;
-    enc.speed_settings = SpeedSettings::from_preset(11);
+    enc.speed_settings = SpeedSettings::from_preset(10);
     enc.speed_settings.rdo_lookahead_frames = 1;
     enc.min_key_frame_interval = 20;
     enc.max_key_frame_interval = 50;
