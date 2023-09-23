@@ -403,7 +403,8 @@ impl Component for AttendantsComponent {
             .sorted_keys()
             .iter()
             .map(|key| {
-                if USERS_ALLOWED_TO_STREAM.len() != 0 && !USERS_ALLOWED_TO_STREAM.iter().any(|host| host == key)
+                if USERS_ALLOWED_TO_STREAM.len() != 0
+                    && !USERS_ALLOWED_TO_STREAM.iter().any(|host| host == key)
                 {
                     return html! {};
                 }
