@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use quinn::{ClientConfig, Endpoint};
-use rustls::RootCertStore;
-use std::{error::Error, fs, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
+
+
+use std::{path::PathBuf, sync::Arc, time::Instant};
 use tracing::{debug, info};
 use url::Url;
 

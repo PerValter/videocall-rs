@@ -1,9 +1,9 @@
 use anyhow::Result;
 use base64::encode;
-use bus::{Bus, BusReader};
+use bus::{Bus};
 use futures_util::{SinkExt, StreamExt};
 use image::codecs;
-use image::ImageBuffer;
+
 use image::Rgb;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::RequestedFormat;
@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, thread};
 use tracing::{debug, error, info, warn};
-use types::protos::media_packet;
+
 use types::protos::media_packet::media_packet::MediaType;
 use types::protos::media_packet::{MediaPacket, VideoMetadata};
 use types::protos::packet_wrapper::{packet_wrapper::PacketType, PacketWrapper};
@@ -64,7 +64,7 @@ pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
     } else {
         "delta".to_string()
     };
-    let mut media_packet: MediaPacket = MediaPacket {
+    let media_packet: MediaPacket = MediaPacket {
         data: chunk.data.clone(),
         frame_type,
         email: email.to_owned(),
@@ -129,7 +129,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
 
     let (fps_tx, fps_rx): (Sender<u128>, Receiver<u128>) = mpsc::channel();
     let (cam_tx, cam_rx) = mpsc::channel::<CameraPacket>();
-    let (tx, rx) = mpsc::channel::<String>();
+    let (_tx, _rx) = mpsc::channel::<String>();
 
     let devices = nokhwa::query(ApiBackend::Auto)?;
     info!("available cameras: {:?}", devices);
@@ -161,12 +161,12 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
         let mut camera = Camera::new(
             CameraIndex::Index(video_device_index as u32),
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
-                (CameraFormat::new_from(
+                CameraFormat::new_from(
                     width as u32,
                     height as u32,
                     FrameFormat::MJPEG,
                     framerate,
-                )),
+                ),
             )),
         )
         .unwrap();
