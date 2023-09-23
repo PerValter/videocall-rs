@@ -1,6 +1,6 @@
 use anyhow::Result;
 use base64::encode;
-use bus::{Bus};
+use bus::Bus;
 use futures_util::{SinkExt, StreamExt};
 use image::codecs;
 
@@ -161,12 +161,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
         let mut camera = Camera::new(
             CameraIndex::Index(video_device_index as u32),
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
-                CameraFormat::new_from(
-                    width as u32,
-                    height as u32,
-                    FrameFormat::MJPEG,
-                    framerate,
-                ),
+                CameraFormat::new_from(width as u32, height as u32, FrameFormat::MJPEG, framerate),
             )),
         )
         .unwrap();
