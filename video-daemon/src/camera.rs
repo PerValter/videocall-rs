@@ -86,7 +86,7 @@ pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
     }
 }
 
-static THRESHOLD_MILLIS: u128 = 1000;
+static THRESHOLD_MILLIS: u128 = 10000;
 
 pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     let mut enc = EncoderConfig::default();
