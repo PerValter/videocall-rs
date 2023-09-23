@@ -120,7 +120,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     enc.still_picture = false;
     enc.tiles = 4;
     enc.bitrate = 1000000 * 5;
-    enc.chroma_sampling = ChromaSampling::Cs444;
+    enc.chroma_sampling = ChromaSampling::Cs420;
 
     let bus: Arc<Mutex<Bus<String>>> = Arc::new(Mutex::new(bus::Bus::new(10)));
     let bus_copy = bus.clone();
