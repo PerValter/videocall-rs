@@ -2,8 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures::StreamExt;
 use http::Method;
-use quinn::VarInt;
 use quinn::crypto::rustls::HandshakeData;
+use quinn::VarInt;
 use rustls::{Certificate, PrivateKey};
 use sec_http3::error::Code;
 use sec_http3::sec_http3_quinn as h3_quinn;
@@ -20,13 +20,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::RwLock;
 use tracing::{error, info, trace_span};
 
-pub const WEB_TRANSPORT_ALPN: &[&[u8]] = &[
-    b"h3",
-    b"h3-32",
-    b"h3-31",
-    b"h3-30",
-    b"h3-29",
-];
+pub const WEB_TRANSPORT_ALPN: &[&[u8]] = &[b"h3", b"h3-32", b"h3-31", b"h3-30", b"h3-29"];
 
 pub const QUIC_ALPN: &[u8] = b"hq-29";
 
@@ -119,7 +113,7 @@ pub async fn start(opt: WebTransportOpt) -> Result<(), Box<dyn std::error::Error
     while let Some(new_conn) = endpoint.accept().await {
         trace_span!("New connection being attempted");
         let nc = nc.clone();
-        
+
         tokio::spawn(async move {
             match new_conn.await {
                 Ok(conn) => {
@@ -381,8 +375,7 @@ where
 async fn handle_quic_connection(
     conn: quinn::Connection,
     nc: async_nats::client::Client,
-) -> Result<()>
- {
+) -> Result<()> {
     let session_id = conn.stable_id();
     let session = Arc::new(RwLock::new(conn));
     let should_run = Arc::new(AtomicBool::new(true));
