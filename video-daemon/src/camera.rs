@@ -99,7 +99,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     let framerate: u32 = env::var("FRAMERATE")
         .ok()
         .and_then(|n| n.parse::<u32>().ok())
-        .unwrap_or(30u32);
+        .unwrap_or(10u32);
     let encoder = env::var("ENCODER")
         .ok()
         .and_then(|o| Encoder::from_str(o.as_ref()).ok())
