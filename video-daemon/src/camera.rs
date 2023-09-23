@@ -99,7 +99,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     let framerate: u32 = env::var("FRAMERATE")
         .ok()
         .and_then(|n| n.parse::<u32>().ok())
-        .unwrap_or(10u32);
+        .unwrap_or(30u32);
     let encoder = env::var("ENCODER")
         .ok()
         .and_then(|o| Encoder::from_str(o.as_ref()).ok())
@@ -110,7 +110,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     enc.height = height;
     enc.bit_depth = 8;
     enc.error_resilient = true;
-    enc.speed_settings = SpeedSettings::from_preset(10);
+    enc.speed_settings = SpeedSettings::from_preset(11);
     enc.speed_settings.rdo_lookahead_frames = 1;
     enc.min_key_frame_interval = 20;
     enc.max_key_frame_interval = 50;
@@ -119,6 +119,7 @@ pub async fn start(quic_tx: Sender<Vec<u8>>) -> Result<()> {
     enc.quantizer = 100;
     enc.still_picture = false;
     enc.tiles = 4;
+    enc.bitrate = 1000000 * 5;
     enc.chroma_sampling = ChromaSampling::Cs444;
 
     let bus: Arc<Mutex<Bus<String>>> = Arc::new(Mutex::new(bus::Bus::new(10)));
