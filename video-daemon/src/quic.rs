@@ -99,6 +99,9 @@ impl Client {
     }
 
     pub async fn send(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() > 30000 {
+            return Err(anyhow!("data too large"));
+        }
         let conn = self
             .connection
             .as_mut()
