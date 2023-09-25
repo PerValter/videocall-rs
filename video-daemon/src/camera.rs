@@ -29,33 +29,6 @@ use types::protos::packet_wrapper::{packet_wrapper::PacketType, PacketWrapper};
 
 type CameraPacket = (ImageBuffer<Rgb<u8>, Vec<u8>>, u128);
 
-#[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, Debug)]
-struct VideoPacket {
-    data: Option<String>,
-    frameType: Option<String>,
-    epochTime: Duration,
-    encoding: Encoder,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Copy)]
-pub enum Encoder {
-    MJPEG,
-    AV1,
-}
-
-impl FromStr for Encoder {
-    type Err = ();
-
-    fn from_str(input: &str) -> Result<Encoder, Self::Err> {
-        match input {
-            "MJPEG" => Ok(Encoder::MJPEG),
-            "AV1" => Ok(Encoder::AV1),
-            _ => Err(()),
-        }
-    }
-}
-
 pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
     let frame_type = if chunk.frame_type == FrameType::KEY {
         "key".to_string()
@@ -84,7 +57,7 @@ pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
     }
 }
 
-static THRESHOLD_MILLIS: u128 = 10000;
+static THRESHOLD_MILLIS: u128 = 1000;
 
 fn clamp(val: f32) -> u8 {
     (val.round() as u8).max(0_u8).min(255_u8)
@@ -110,7 +83,6 @@ pub struct CameraConfig {
     pub height: u32,
     pub framerate: u32,
     pub video_device_index: usize,
-    pub encoder: Encoder,
     pub frame_format: FrameFormat,
 }
 
@@ -190,20 +162,18 @@ impl CameraDaemon {
         warn!("Using config: {:?}", self.config);
         enc.width = self.config.width as usize;
         enc.height = self.config.height as usize;
-        enc.bitrate = 5000;
-        enc.speed_settings = SpeedSettings::from_preset(10);
-        enc.chroma_sampling = ChromaSampling::Cs420;
         enc.bit_depth = 8;
         enc.error_resilient = true;
+        enc.speed_settings = SpeedSettings::from_preset(10);
+        enc.speed_settings.rdo_lookahead_frames = 1;
         enc.min_key_frame_interval = 20;
         enc.max_key_frame_interval = 50;
         enc.low_latency = true;
-        enc.min_quantizer = 200;
-        enc.quantizer = 255;
+        enc.min_quantizer = 50;
+        enc.quantizer = 200;
         enc.still_picture = false;
-
-        enc.speed_settings.rdo_lookahead_frames = 1;
-        enc.tiles = 64;
+        enc.tiles = 4;
+        enc.chroma_sampling = ChromaSampling::Cs420;
 
         debug!("encoder config: {:?}", enc);
 
@@ -213,7 +183,6 @@ impl CameraDaemon {
         let cfg = Config::new().with_encoder_config(enc).with_threads(8);
         let fps_tx = self.fps_tx.clone();
         let mut cam_rx = self.cam_rx.take().unwrap();
-        let encoder = self.config.encoder;
         let width = self.config.width as usize;
         let quic_tx = self.quic_tx.clone();
         let quit = self.quit.clone();
@@ -231,14 +200,6 @@ impl CameraDaemon {
                     debug!("image age {}", image_age);
                     if image_age > THRESHOLD_MILLIS {
                         debug!("throwing away old image with age {} ms", image_age);
-                        continue;
-                    }
-                    if encoder == Encoder::MJPEG {
-                        let mut buf: Vec<u8> = Vec::new();
-                        let mut jpeg_encoder =
-                            codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
-                        jpeg_encoder.encode_image(&image).unwrap();
-                        fps_tx.try_send(since_the_epoch().as_millis()).unwrap();
                         continue;
                     }
                     let mut r_slice: Vec<u8> = vec![];
