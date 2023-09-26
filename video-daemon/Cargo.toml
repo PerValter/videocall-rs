@@ -26,3 +26,4 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter", "fmt", "ans
 url = "2.4.1"
 webpki-roots = "0.25.2"
 types = { path= "../types"}
+yuv = "0.1.5"

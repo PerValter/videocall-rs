@@ -1,8 +1,5 @@
 use anyhow::Result;
-use image::codecs;
-use image::ImageBuffer;
-
-use image::Rgb;
+use image::RgbImage;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::RequestedFormat;
 use nokhwa::utils::RequestedFormatType;
@@ -11,11 +8,7 @@ use nokhwa::{
     Camera,
 };
 use protobuf::Message;
-use rav1e::prelude::ChromaSampling;
-use rav1e::*;
-use rav1e::{config::SpeedSettings, prelude::FrameType};
-use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use rav1e::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -27,7 +20,7 @@ use types::protos::media_packet::media_packet::MediaType;
 use types::protos::media_packet::{MediaPacket, VideoMetadata};
 use types::protos::packet_wrapper::{packet_wrapper::PacketType, PacketWrapper};
 
-type CameraPacket = (ImageBuffer<Rgb<u8>, Vec<u8>>, u128);
+type CameraPacket = (RgbImage, u128);
 
 pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
     let frame_type = if chunk.frame_type == FrameType::KEY {
@@ -58,20 +51,6 @@ pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
 }
 
 static THRESHOLD_MILLIS: u128 = 1000;
-
-fn clamp(val: f32) -> u8 {
-    (val.round() as u8).max(0_u8).min(255_u8)
-}
-
-fn to_ycbcr(pixel: &Rgb<u8>) -> (u8, u8, u8) {
-    let [r, g, b] = pixel.0;
-
-    let y = 16_f32 + (65.481 * r as f32 + 128.553 * g as f32 + 24.966 * b as f32) / 255_f32;
-    let cb = 128_f32 + (-37.797 * r as f32 - 74.203 * g as f32 + 112.000 * b as f32) / 255_f32;
-    let cr = 128_f32 + (112.000 * r as f32 - 93.786 * g as f32 - 18.214 * b as f32) / 255_f32;
-
-    (clamp(y), clamp(cb), clamp(cr))
-}
 
 pub fn since_the_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
@@ -124,7 +103,9 @@ impl CameraDaemon {
 
     fn camera_thread(&self) -> Result<JoinHandle<()>> {
         let devices = nokhwa::query(ApiBackend::Auto)?;
-        info!("available cameras: {:?}", devices);
+        for i in 0..devices.len() {
+            info!("available device index {}: {:?}", i, devices[i]);
+        }
         let cam_tx = self.cam_tx.clone();
         let width = self.config.width;
         let height = self.config.height;
@@ -146,12 +127,9 @@ impl CameraDaemon {
                 if quit.load(std::sync::atomic::Ordering::Relaxed) {
                     return ();
                 }
-                if let Ok(image) = frame.decode_image::<RgbFormat>() {
-                    if let Err(e) = cam_tx.try_send(Some((image, since_the_epoch().as_millis()))) {
-                        error!("Unable to send image: {}", e);
-                    }
-                } else {
-                    warn!("Unable to decode image from camera frame");
+                debug!("source frame format: {:?}", frame.source_frame_format());
+                if let Err(e) = cam_tx.try_send(Some((frame.decode_image::<RgbFormat>().unwrap(), since_the_epoch().as_millis()))) {
+                    error!("Unable to send image: {}", e);
                 }
             }
         }))
@@ -160,8 +138,10 @@ impl CameraDaemon {
     fn encoder_thread(&mut self) -> JoinHandle<()> {
         let mut enc = EncoderConfig::default();
         warn!("Using config: {:?}", self.config);
-        enc.width = self.config.width as usize;
-        enc.height = self.config.height as usize;
+        let width = self.config.width;
+        let height = self.config.height;
+        enc.width = width as usize;
+        enc.height = height as usize;
         enc.bit_depth = 8;
         enc.error_resilient = true;
         enc.speed_settings = SpeedSettings::from_preset(10);
@@ -169,56 +149,41 @@ impl CameraDaemon {
         enc.min_key_frame_interval = 20;
         enc.max_key_frame_interval = 50;
         enc.low_latency = true;
-        enc.min_quantizer = 50;
-        enc.quantizer = 200;
-        enc.still_picture = false;
-        enc.tiles = 4;
+        enc.min_quantizer = 100;
+        enc.quantizer = 150;
+        enc.tiles = 16;
+        enc.bitrate = 1000;
         enc.chroma_sampling = ChromaSampling::Cs420;
+        enc.chroma_sample_position = ChromaSamplePosition::Unknown;
 
         debug!("encoder config: {:?}", enc);
 
         // TODO What is this???
         // enc.tune = Tune::Psnr;
 
-        let cfg = Config::new().with_encoder_config(enc).with_threads(8);
+        let cfg = Config::new().with_encoder_config(enc).with_threads(16);
         let fps_tx = self.fps_tx.clone();
         let mut cam_rx = self.cam_rx.take().unwrap();
-        let width = self.config.width as usize;
         let quic_tx = self.quic_tx.clone();
         let quit = self.quit.clone();
         std::thread::spawn(move || {
             loop {
                 let mut ctx: Context<u8> = cfg.new_context().unwrap();
                 while let Some(data) = cam_rx.blocking_recv() {
-                    debug!("encoder thread");
+                    let start = Instant::now();
                     if quit.load(std::sync::atomic::Ordering::Relaxed) {
                         return ();
                     }
                     let (image, age) = data.unwrap();
                     // If age older than threshold, throw it away.
                     let image_age = since_the_epoch().as_millis() - age;
-                    debug!("image age {}", image_age);
                     if image_age > THRESHOLD_MILLIS {
                         debug!("throwing away old image with age {} ms", image_age);
                         continue;
                     }
-                    let mut r_slice: Vec<u8> = vec![];
-                    let mut g_slice: Vec<u8> = vec![];
-                    let mut b_slice: Vec<u8> = vec![];
-                    for pixel in image.pixels() {
-                        let (r, g, b) = to_ycbcr(pixel);
-                        r_slice.push(r);
-                        g_slice.push(g);
-                        b_slice.push(b);
-                    }
-                    let planes = vec![r_slice, g_slice, b_slice];
-                    debug!("Creating new frame");
                     let mut frame = ctx.new_frame();
+                    add_data_to_frame(&mut frame, image, width as usize);
                     let encoding_time = Instant::now();
-                    for (dst, src) in frame.planes.iter_mut().zip(planes) {
-                        dst.copy_from_raw_u8(&src, width, 1);
-                    }
-
                     match ctx.send_frame(frame) {
                         Ok(_) => {
                             debug!("queued frame");
@@ -235,7 +200,10 @@ impl CameraDaemon {
                     debug!("receiving encoded frame");
                     match ctx.receive_packet() {
                         Ok(pkt) => {
-                            debug!("time encoding {:?}", encoding_time.elapsed());
+                            debug!(
+                                "encoder thread: time encoding {:?}",
+                                encoding_time.elapsed()
+                            );
                             let packet_wrapper = transform_video_chunk(&pkt, "test");
                             if let Err(e) = fps_tx.try_send(since_the_epoch().as_millis()) {
                                 error!("Unable to send fps: {:?}", e);
@@ -257,6 +225,7 @@ impl CameraDaemon {
                             }
                         },
                     }
+                    debug!("encoder thread: time elapsed {:?}", start.elapsed());
                 }
             }
         })
@@ -290,5 +259,48 @@ impl CameraDaemon {
             handle.join().unwrap();
         }
         Ok(())
+    }
+}
+
+fn clamp(val: f32) -> u8 {
+    (val.round() as u8).max(0_u8).min(255_u8)
+}
+
+fn to_ycbcr(pixel: [u8; 3]) -> (u8, u8, u8) {
+    let [r, g, b] = pixel;
+
+    let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    let u = (b as f32 - y) / 2.0 as f32;
+    let v = (r as f32 - y) / 2.0 as f32;
+
+    (clamp(y), clamp(u), clamp(v))
+}
+
+fn add_data_to_frame(frame: &mut Frame<u8>, img: RgbImage, width: usize) {
+    let mut y_slice: Vec<u8> = vec![];
+    let mut u_slice: Vec<u8> = vec![];
+    let mut v_slice: Vec<u8> = vec![];
+    for pixel in img.pixels() {
+        let (y, u, v) = to_ycbcr(pixel.0);
+        y_slice.push(y);
+        u_slice.push(u);
+        v_slice.push(v);
+    }
+    let planes = vec![y_slice, u_slice, v_slice];
+    for (dst, src) in frame.planes.iter_mut().zip(planes) {
+        dst.copy_from_raw_u8(&src, width, 1);
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_to_ycbcr() {
+        let pixel = [123, 69, 20];
+        let output = to_ycbcr(pixel);
+        assert_eq!(output, (84, 98, 155));
     }
 }

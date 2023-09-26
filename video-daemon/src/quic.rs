@@ -100,12 +100,13 @@ impl Client {
 
     pub async fn send(&mut self, data: Vec<u8>) -> Result<()> {
         if data.len() > 30000 {
-            return Err(anyhow!("data too large"));
+            return Err(anyhow!("data too large {} bytes", data.len()));
         }
         let conn = self
             .connection
             .as_mut()
-            .ok_or_else(|| anyhow!("not connected"))?.clone();
+            .ok_or_else(|| anyhow!("not connected"))?
+            .clone();
         tokio::spawn(async move {
             let mut stream = conn.open_uni().await.unwrap();
             stream.write_all(&data).await.unwrap();
