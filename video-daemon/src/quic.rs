@@ -1,5 +1,10 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use protobuf::Message;
+use types::protos::{
+    connection_packet::ConnectionPacket,
+    packet_wrapper::{packet_wrapper::PacketType, PacketWrapper},
+};
 
 use std::{path::PathBuf, sync::Arc, time::Instant};
 use tracing::{debug, info};
@@ -64,6 +69,12 @@ pub struct Opt {
 
     url: Url,
 
+    #[clap(long = "user-id")]
+    user_id: String,
+
+    #[clap(long = "meeting-id")]
+    meeting_id: String,
+
     /// Override hostname used for certificate verification
     #[clap(long = "host")]
     host: Option<String>,
@@ -94,6 +105,17 @@ impl Client {
     pub async fn connect(&mut self) -> Result<()> {
         let conn = connect(&self.options).await?;
         self.connection = Some(conn);
+
+        // Send connection message with meeting id
+        let mut packet = PacketWrapper::default();
+        packet.packet_type = PacketType::CONNECTION.into();
+        packet.email = self.options.user_id.clone();
+        let mut connection_packet = ConnectionPacket::default();
+        connection_packet.meeting_id = self.options.meeting_id.clone();
+        packet.data = connection_packet.write_to_bytes().unwrap();
+        let packet = packet.write_to_bytes().unwrap();
+        self.send(packet).await?;
+
         debug!("connected to server {}", self.options.url);
         Ok(())
     }

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures::StreamExt;
 use http::Method;
+use protobuf::Message;
 use quinn::crypto::rustls::HandshakeData;
 use quinn::VarInt;
 use rustls::{Certificate, PrivateKey};
@@ -17,8 +18,12 @@ use sec_http3::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, watch, RwLock};
 use tracing::{error, info, trace_span};
+use types::protos::packet_wrapper::packet_wrapper::PacketType;
+use types::protos::packet_wrapper::PacketWrapper;
+
+use crate::messages::server::Packet;
 
 pub const WEB_TRANSPORT_ALPN: &[&[u8]] = &[b"h3", b"h3-32", b"h3-31", b"h3-30", b"h3-29"];
 
@@ -379,31 +384,35 @@ async fn handle_quic_connection(
     let session_id = conn.stable_id();
     let session = Arc::new(RwLock::new(conn));
     let should_run = Arc::new(AtomicBool::new(true));
-    let lobby_id = 666;
+    // let lobby_id = 666;
 
-    let subject = format!("room.{}.*", lobby_id).replace(' ', "_");
-    let specific_subject = format!("room.{}.{}", lobby_id, session_id).replace(' ', "_");
-    let mut sub = match nc
-        .queue_subscribe(subject.clone(), specific_subject.clone())
-        .await
-    {
-        Ok(sub) => {
-            info!("Subscribed to subject {}", subject);
-            sub
-        }
-        Err(e) => {
-            let err = format!("error subscribing to subject {}: {}", subject, e);
-            error!("{}", err);
-            return Err(anyhow!(err));
-        }
-    };
-
-    let specific_subject_clone = specific_subject.clone();
+    struct MeetingInfo {
+        lobby_id: String,
+        session_id: String,
+    }
+    let meeting_info = oneshot::channel::<MeetingInfo>();
+    let (specific_subject_tx, specific_subject_rx) = watch::channel::<Option<String>>(None);
 
     let nats_task = {
         let session = session.clone();
         let should_run = should_run.clone();
         tokio::spawn(async move {
+            if specific_subject_rx.changed().await {}
+            let specific_subject = specific_subject_rx.borrow().clone().unwrap();
+            let mut sub = match nc
+                .queue_subscribe(subject.clone(), specific_subject.clone())
+                .await
+            {
+                Ok(sub) => {
+                    info!("Subscribed to subject {}", subject);
+                    sub
+                }
+                Err(e) => {
+                    let err = format!("error subscribing to subject {}: {}", subject, e);
+                    error!("{}", err);
+                    return;
+                }
+            };
             while let Some(msg) = sub.next().await {
                 if !should_run.load(Ordering::SeqCst) {
                     break;
@@ -436,16 +445,31 @@ async fn handle_quic_connection(
     let quic_task = {
         let session = session.clone();
         let nc = nc.clone();
-        let specific_subject = specific_subject.clone();
         tokio::spawn(async move {
             let session = session.read().await;
             while let Ok(mut uni_stream) = session.accept_uni().await {
                 let nc = nc.clone();
-                let specific_subject = specific_subject.clone();
                 tokio::spawn(async move {
                     if let Ok(d) = uni_stream.read_to_end(32000).await {
-                        if let Err(e) = nc.publish(specific_subject.clone(), d.into()).await {
-                            error!("Error publishing to subject {}: {}", &specific_subject, e);
+                        if specific_subject.borrow().is_none() {
+                            if let Ok(packet_wrapper) = PacketWrapper::parse_from_bytes(&d) {
+                                if packet_wrapper.packet_type == PacketType::CONNECTION {
+                                    let connection_packet =
+                                        packet_wrapper.connection_packet.unwrap();
+                                    specific_subject = format!(
+                                        "room.{}.{}",
+                                        connection_packet.lobby_id, packet_wrapper.email
+                                    )
+                                    .replace(' ', "_");
+                                    info!("Specific subject: {}", specific_subject);
+                                    specific_subject_tx.send(Some(specific_subject.clone()));
+                                }
+                            }
+                        }
+                        else {
+                            if let Err(e) = nc.publish(specific_subject.clone(), d.into()).await {
+                                error!("Error publishing to subject {}: {}", &specific_subject, e);
+                            }
                         }
                     } else {
                         error!("Error reading from unidirectional stream");
