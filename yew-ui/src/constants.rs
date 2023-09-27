@@ -1,17 +1,7 @@
 // This is read at compile time, please restart if you change this value.
 pub const LOGIN_URL: &str = std::env!("LOGIN_URL");
 pub static AUDIO_CODEC: &str = "opus"; // https://www.w3.org/TR/webcodecs-codec-registry/#audio-codec-registry
-                                       // pub static VIDEO_CODEC: &str = "vp09.02.10.12"; // profile 0,level 1.0, bit depth 8,
-
-// Commented out because it is not as fast as vp9.
-
-// https://www.w3.org/TR/webcodecs-codec-registry/#video-codec-registry
-// av01: AV1
-// 0 profile: main profile
-// 01 level: level2.1
-// M tier: Main tier
-// 08 bit depth = 8 bits
-pub static VIDEO_CODEC: &str = "av01.0.01M.08";
+pub static VIDEO_CODEC: &str = "vp09.01.10.08";
 
 pub const AUDIO_CHANNELS: u32 = 1u32;
 pub const AUDIO_SAMPLE_RATE: u32 = 48000u32;

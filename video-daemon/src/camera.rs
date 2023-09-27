@@ -1,3 +1,5 @@
+use crate::video_encoder::Frame;
+use crate::video_encoder::VideoEncoderBuilder;
 use anyhow::Result;
 use image::RgbImage;
 use nokhwa::pixel_format::RgbFormat;
@@ -8,7 +10,6 @@ use nokhwa::{
     Camera,
 };
 use protobuf::Message;
-use rav1e::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -22,20 +23,20 @@ use types::protos::packet_wrapper::{packet_wrapper::PacketType, PacketWrapper};
 
 type CameraPacket = (RgbImage, u128);
 
-pub fn transform_video_chunk(chunk: &Packet<u8>, email: &str) -> PacketWrapper {
-    let frame_type = if chunk.frame_type == FrameType::KEY {
+pub fn transform_video_chunk(frame: &Frame, email: &str) -> PacketWrapper {
+    let frame_type = if frame.key {
         "key".to_string()
     } else {
         "delta".to_string()
     };
     let media_packet: MediaPacket = MediaPacket {
-        data: chunk.data.clone(),
+        data: frame.data.to_vec(),
         frame_type,
         email: email.to_owned(),
         media_type: MediaType::VIDEO.into(),
         timestamp: since_the_epoch().as_micros() as f64,
         video_metadata: Some(VideoMetadata {
-            sequence: chunk.input_frameno,
+            sequence: frame.pts as u64,
             ..Default::default()
         })
         .into(),
@@ -139,96 +140,48 @@ impl CameraDaemon {
     }
 
     fn encoder_thread(&mut self) -> JoinHandle<()> {
-        let mut enc = EncoderConfig::default();
-        warn!("Using config: {:?}", self.config);
-        let width = self.config.width;
-        let height = self.config.height;
-        enc.width = width as usize;
-        enc.height = height as usize;
-        enc.bit_depth = 8;
-        enc.error_resilient = true;
-        enc.speed_settings = SpeedSettings::from_preset(10);
-        enc.speed_settings.rdo_lookahead_frames = 1;
-        enc.min_key_frame_interval = 20;
-        enc.max_key_frame_interval = 50;
-        enc.low_latency = true;
-        enc.min_quantizer = 100;
-        enc.quantizer = 150;
-        enc.tiles = 16;
-        enc.bitrate = 1000;
-        enc.chroma_sampling = ChromaSampling::Cs420;
-        enc.chroma_sample_position = ChromaSamplePosition::Unknown;
-
-        debug!("encoder config: {:?}", enc);
-
-        // TODO What is this???
-        // enc.tune = Tune::Psnr;
-
-        let cfg = Config::new().with_encoder_config(enc).with_threads(16);
         let fps_tx = self.fps_tx.clone();
         let mut cam_rx = self.cam_rx.take().unwrap();
         let quic_tx = self.quic_tx.clone();
         let quit = self.quit.clone();
+        let width = self.config.width as usize;
+        let height = self.config.height as usize;
         std::thread::spawn(move || {
-            loop {
-                let mut ctx: Context<u8> = cfg.new_context().unwrap();
-                while let Some(data) = cam_rx.blocking_recv() {
-                    let start = Instant::now();
-                    if quit.load(std::sync::atomic::Ordering::Relaxed) {
-                        return ();
-                    }
-                    let (image, age) = data.unwrap();
-                    // If age older than threshold, throw it away.
-                    let image_age = since_the_epoch().as_millis() - age;
-                    if image_age > THRESHOLD_MILLIS {
-                        debug!("throwing away old image with age {} ms", image_age);
-                        continue;
-                    }
-                    let mut frame = ctx.new_frame();
-                    add_data_to_frame(&mut frame, image, width as usize);
-                    let encoding_time = Instant::now();
-                    match ctx.send_frame(frame) {
-                        Ok(_) => {
-                            debug!("queued frame");
+            let start = Instant::now();
+            let mut video_encoder = VideoEncoderBuilder::default()
+                .set_resolution(width, height)
+                .build()
+                .unwrap();
+            while let Some(data) = cam_rx.blocking_recv() {
+                if quit.load(std::sync::atomic::Ordering::Relaxed) {
+                    return ();
+                }
+                let (image, age) = data.unwrap();
+
+                // If age older than threshold, throw it away.
+                let image_age = since_the_epoch().as_millis() - age;
+                if image_age > THRESHOLD_MILLIS {
+                    debug!("throwing away old image with age {} ms", image_age);
+                    continue;
+                }
+                let time = start.elapsed();
+                let encoding_time = Instant::now();
+                let packets = video_encoder
+                    .encode(
+                        (time.as_millis() + time.subsec_millis() as u128) as i64,
+                        &image.into_raw(),
+                    )
+                    .unwrap();
+                debug!("encoding took {:?}", encoding_time.elapsed());
+                for packet in packets {
+                    let packet_wrapper = transform_video_chunk(&packet, "test");
+                    if let Err(e) = quic_tx.try_send(packet_wrapper.write_to_bytes().unwrap()) {
+                        error!("Unable to send packet: {:?}", e);
+                    } else {
+                        if let Err(e) = fps_tx.try_send(since_the_epoch().as_millis()) {
+                            error!("Unable to send fps: {:?}", e);
                         }
-                        Err(e) => match e {
-                            EncoderStatus::EnoughData => {
-                                debug!("Unable to append frame to the internal queue");
-                            }
-                            _ => {
-                                panic!("Unable to send frame");
-                            }
-                        },
                     }
-                    debug!("receiving encoded frame");
-                    match ctx.receive_packet() {
-                        Ok(pkt) => {
-                            debug!(
-                                "encoder thread: time encoding {:?}",
-                                encoding_time.elapsed()
-                            );
-                            let packet_wrapper = transform_video_chunk(&pkt, "test");
-                            if let Err(e) = fps_tx.try_send(since_the_epoch().as_millis()) {
-                                error!("Unable to send fps: {:?}", e);
-                            }
-                            if let Err(e) =
-                                quic_tx.try_send(packet_wrapper.write_to_bytes().unwrap())
-                            {
-                                error!("Unable to send packet: {:?}", e);
-                            }
-                        }
-                        Err(e) => match e {
-                            EncoderStatus::LimitReached => {
-                                warn!("read thread: Limit reached");
-                            }
-                            EncoderStatus::Encoded => debug!("read thread: Encoded"),
-                            EncoderStatus::NeedMoreData => debug!("read thread: Need more data"),
-                            _ => {
-                                warn!("read thread: Unable to receive packet");
-                            }
-                        },
-                    }
-                    debug!("encoder thread: time elapsed {:?}", start.elapsed());
                 }
             }
         })
@@ -262,47 +215,5 @@ impl CameraDaemon {
             handle.join().unwrap();
         }
         Ok(())
-    }
-}
-
-fn clamp(val: f32) -> u8 {
-    (val.round() as u8).max(0_u8).min(255_u8)
-}
-
-fn to_ycbcr(pixel: [u8; 3]) -> (u8, u8, u8) {
-    let [r, g, b] = pixel;
-
-    let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    let u = (b as f32 - y) / 2.0 as f32;
-    let v = (r as f32 - y) / 2.0 as f32;
-
-    (clamp(y), clamp(u), clamp(v))
-}
-
-fn add_data_to_frame(frame: &mut Frame<u8>, img: RgbImage, width: usize) {
-    let mut y_slice: Vec<u8> = vec![];
-    let mut u_slice: Vec<u8> = vec![];
-    let mut v_slice: Vec<u8> = vec![];
-    for pixel in img.pixels() {
-        let (y, u, v) = to_ycbcr(pixel.0);
-        y_slice.push(y);
-        u_slice.push(u);
-        v_slice.push(v);
-    }
-    let planes = vec![y_slice, u_slice, v_slice];
-    for (dst, src) in frame.planes.iter_mut().zip(planes) {
-        dst.copy_from_raw_u8(&src, width, 1);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_to_ycbcr() {
-        let pixel = [123, 69, 20];
-        let output = to_ycbcr(pixel);
-        assert_eq!(output, (84, 98, 155));
     }
 }
