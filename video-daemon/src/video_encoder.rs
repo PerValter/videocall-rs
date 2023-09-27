@@ -135,7 +135,7 @@ impl VideoEncoder {
         Ok(())
     }
 
-    pub fn encode(&mut self, pts: i64, data: &[u8]) -> anyhow::Result<Packets> {
+    pub fn encode(&mut self, pts: i64, data: &[u8]) -> anyhow::Result<Frames> {
         let image = MaybeUninit::zeroed();
         let mut image = unsafe { image.assume_init() };
 
@@ -159,7 +159,7 @@ impl VideoEncoder {
             VPX_DL_REALTIME as c_ulong,
         ));
 
-        Ok(Packets {
+        Ok(Frames {
             ctx: &mut self.ctx,
             iter: std::ptr::null(),
         })
@@ -176,12 +176,12 @@ pub struct Frame<'a> {
     pub pts: i64,
 }
 
-pub struct Packets<'a> {
+pub struct Frames<'a> {
     ctx: &'a mut vpx_codec_ctx_t,
     iter: vpx_codec_iter_t,
 }
 
-impl<'a> Iterator for Packets<'a> {
+impl<'a> Iterator for Frames<'a> {
     type Item = Frame<'a>;
     #[allow(clippy::unnecessary_cast)]
     fn next(&mut self) -> Option<Self::Item> {

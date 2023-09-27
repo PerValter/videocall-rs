@@ -166,15 +166,15 @@ impl CameraDaemon {
                 }
                 let time = start.elapsed();
                 let encoding_time = Instant::now();
-                let packets = video_encoder
+                let frames = video_encoder
                     .encode(
                         (time.as_millis() + time.subsec_millis() as u128) as i64,
                         &image.into_raw(),
                     )
                     .unwrap();
                 debug!("encoding took {:?}", encoding_time.elapsed());
-                for packet in packets {
-                    let packet_wrapper = transform_video_chunk(&packet, "test");
+                for frame in frames {
+                    let packet_wrapper = transform_video_chunk(&frame, "test");
                     if let Err(e) = quic_tx.try_send(packet_wrapper.write_to_bytes().unwrap()) {
                         error!("Unable to send packet: {:?}", e);
                     } else {
