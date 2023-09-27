@@ -20,10 +20,9 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, watch, RwLock};
 use tracing::{error, info, trace_span};
+use types::protos::connection_packet::ConnectionPacket;
 use types::protos::packet_wrapper::packet_wrapper::PacketType;
 use types::protos::packet_wrapper::PacketWrapper;
-
-use crate::messages::server::Packet;
 
 pub const WEB_TRANSPORT_ALPN: &[&[u8]] = &[b"h3", b"h3-32", b"h3-31", b"h3-30", b"h3-29"];
 
@@ -391,14 +390,19 @@ async fn handle_quic_connection(
         session_id: String,
     }
     let meeting_info = oneshot::channel::<MeetingInfo>();
-    let (specific_subject_tx, specific_subject_rx) = watch::channel::<Option<String>>(None);
+    let (specific_subject_tx, mut specific_subject_rx) = watch::channel::<Option<String>>(None);
 
     let nats_task = {
         let session = session.clone();
         let should_run = should_run.clone();
+        let nc_clone = nc.clone();
+        let specific_subject_rx_clone = specific_subject_rx.clone();
         tokio::spawn(async move {
-            if specific_subject_rx.changed().await {}
+            let mut specific_subject_rx = specific_subject_rx_clone;
+            let nc = nc_clone;
+            specific_subject_rx.changed().await.unwrap();
             let specific_subject = specific_subject_rx.borrow().clone().unwrap();
+            let subject = session_subject_to_lobby_subject(&specific_subject);
             let mut sub = match nc
                 .queue_subscribe(subject.clone(), specific_subject.clone())
                 .await
@@ -417,7 +421,7 @@ async fn handle_quic_connection(
                 if !should_run.load(Ordering::SeqCst) {
                     break;
                 }
-                if msg.subject == specific_subject_clone {
+                if Some(msg.subject) == specific_subject_rx.borrow().clone() {
                     continue;
                 }
                 let session = session.read().await;
@@ -443,30 +447,35 @@ async fn handle_quic_connection(
     };
 
     let quic_task = {
+        let specific_subject_rx_clone = specific_subject_rx.clone();
         let session = session.clone();
         let nc = nc.clone();
         tokio::spawn(async move {
             let session = session.read().await;
+            let specific_subject_tx = Arc::new(specific_subject_tx);
             while let Ok(mut uni_stream) = session.accept_uni().await {
                 let nc = nc.clone();
+                let specific_subject_tx_clone = specific_subject_tx.clone();
+                let specific_subject_rx = specific_subject_rx_clone.clone();
                 tokio::spawn(async move {
                     if let Ok(d) = uni_stream.read_to_end(32000).await {
-                        if specific_subject.borrow().is_none() {
+                        if specific_subject_rx.borrow().is_none() {
                             if let Ok(packet_wrapper) = PacketWrapper::parse_from_bytes(&d) {
-                                if packet_wrapper.packet_type == PacketType::CONNECTION {
+                                if packet_wrapper.packet_type == PacketType::CONNECTION.into() {
                                     let connection_packet =
-                                        packet_wrapper.connection_packet.unwrap();
-                                    specific_subject = format!(
+                                        ConnectionPacket::parse_from_bytes(&packet_wrapper.data)
+                                            .unwrap();
+                                    let specific_subject = format!(
                                         "room.{}.{}",
-                                        connection_packet.lobby_id, packet_wrapper.email
+                                        connection_packet.meeting_id, packet_wrapper.email
                                     )
                                     .replace(' ', "_");
                                     info!("Specific subject: {}", specific_subject);
-                                    specific_subject_tx.send(Some(specific_subject.clone()));
+                                    specific_subject_tx_clone.send(Some(specific_subject.clone()));
                                 }
                             }
-                        }
-                        else {
+                        } else {
+                            let specific_subject = specific_subject_rx.borrow().clone().unwrap();
                             if let Err(e) = nc.publish(specific_subject.clone(), d.into()).await {
                                 error!("Error publishing to subject {}: {}", &specific_subject, e);
                             }
@@ -482,6 +491,10 @@ async fn handle_quic_connection(
     let _datagrams_task = {
         tokio::spawn(async move {
             let session = session.read().await;
+            if specific_subject_rx.borrow().is_none() {
+                specific_subject_rx.changed().await.unwrap();
+            }
+            let specific_subject = specific_subject_rx.borrow().clone().unwrap();
             while let Ok(datagram) = session.read_datagram().await {
                 let nc = nc.clone();
                 if let Err(e) = nc.publish(specific_subject.clone(), datagram).await {
@@ -495,4 +508,12 @@ async fn handle_quic_connection(
     nats_task.abort();
     info!("Finished handling session");
     Ok(())
+}
+
+fn session_subject_to_lobby_subject(subject: &str) -> String {
+    let parts = subject.split('.').collect::<Vec<&str>>();
+    let mut lobby_subject = String::from("room.");
+    lobby_subject.push_str(parts[1]);
+    lobby_subject.push_str(".*");
+    lobby_subject
 }
