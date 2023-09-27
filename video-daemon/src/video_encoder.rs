@@ -40,9 +40,9 @@ pub struct VideoEncoderBuilder {
 impl Default for VideoEncoderBuilder {
     fn default() -> Self {
         Self {
-            bitrate_kbps: 300,
-            max_quantizer: 60,
-            min_quantizer: 20,
+            bitrate_kbps: 150,
+            max_quantizer: 63,
+            min_quantizer: 40,
             resolution: (0, 0),
             timebase: (1, 1000),
             cpu_used: 6,

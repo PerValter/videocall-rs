@@ -17,8 +17,8 @@ async fn main() {
     let mut client = Client::new(opt).expect("failed to create client");
     client.connect().await.expect("failed to connect");
     let camera_config = CameraConfig {
-        width: 1280,
-        height: 720,
+        width: 640,
+        height: 480,
         framerate: 30,
         frame_format: nokhwa::utils::FrameFormat::YUYV,
         video_device_index: 0,

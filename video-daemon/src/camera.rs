@@ -128,7 +128,6 @@ impl CameraDaemon {
                 if quit.load(std::sync::atomic::Ordering::Relaxed) {
                     return ();
                 }
-                debug!("source frame format: {:?}", frame.source_frame_format());
                 if let Err(e) = cam_tx.try_send(Some((
                     frame.decode_image::<RgbFormat>().unwrap(),
                     since_the_epoch().as_millis(),
