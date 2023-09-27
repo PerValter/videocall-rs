@@ -367,6 +367,7 @@ impl Component for AttendantsComponent {
                             self.peer_keys.remove(&email);
                         }
                     }
+                    Ok(PacketType::CONNECTION) => {}
                     Err(_) => {}
                 }
                 false

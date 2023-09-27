@@ -8,7 +8,7 @@ replicaCount: 1
 image:
   repository: securityunion/rustlemania-ui
   pullPolicy: Always
-  tag: 9c0b2bbe6c75eafb3abf03722b28c3204b9462c6
+  tag: e9fc8befcbaac8b6bca517904c752d399b9f89ed
 resources: {}
 podAnnotations: {}
 podSecurityContext: {}
