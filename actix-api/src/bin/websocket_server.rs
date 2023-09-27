@@ -187,7 +187,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let cors = Cors::permissive();
 
-        let app = if oauth_client_id.is_empty() {
+        if oauth_client_id.is_empty() {
             App::new()
                 .wrap(cors)
                 .app_data(web::Data::new(AppState { chat: chat.clone() }))
@@ -209,7 +209,7 @@ async fn main() -> std::io::Result<()> {
                 .service(handle_google_oauth_callback)
                 .service(login)
                 .service(ws_connect)
-        };
+        }
     })
     .bind((
         "0.0.0.0",

@@ -6,5 +6,5 @@
 
 - nasm
     ```sh
-    sudo apt install nasm
+    sudo apt install libvpx-dev
     ```
