@@ -1,10 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_ulong};
-
-use vpx_sys::vp8e_enc_control_id::*;
-use vpx_sys::vpx_codec_cx_pkt_kind::VPX_CODEC_CX_FRAME_PKT;
-use vpx_sys::vpx_enc_pass::VPX_RC_ONE_PASS;
 use vpx_sys::*;
 
 macro_rules! vpx {
@@ -40,9 +36,9 @@ pub struct VideoEncoderBuilder {
 impl Default for VideoEncoderBuilder {
     fn default() -> Self {
         Self {
-            bitrate_kbps: 150,
+            bitrate_kbps: 1,
             max_quantizer: 63,
-            min_quantizer: 40,
+            min_quantizer: 63,
             resolution: (0, 0),
             timebase: (1, 1000),
             cpu_used: 6,
@@ -77,8 +73,12 @@ impl VideoEncoderBuilder {
         cfg.g_threads = 8;
         cfg.g_lag_in_frames = 0;
         cfg.g_error_resilient = VPX_ERROR_RESILIENT_DEFAULT;
-        cfg.g_pass = VPX_RC_ONE_PASS;
+        cfg.g_pass = vpx_enc_pass::VPX_RC_ONE_PASS;
         cfg.g_profile = 1;
+        cfg.rc_end_usage = vpx_rc_mode::VPX_VBR;
+        // cfg.kf_max_dist = 150;
+        // cfg.kf_min_dist = 150;
+        // cfg.kf_mode = vpx_kf_mode::VPX_KF_AUTO;
 
         let ctx = MaybeUninit::zeroed();
         let mut ctx = unsafe { ctx.assume_init() };
@@ -93,23 +93,23 @@ impl VideoEncoderBuilder {
         // set encoder internal speed settings
         vpx!(vpx_codec_control_(
             &mut ctx,
-            VP8E_SET_CPUUSED as _,
+            vp8e_enc_control_id::VP8E_SET_CPUUSED as _,
             self.cpu_used as c_int
         ));
         // set row level multi-threading
         vpx!(vpx_codec_control_(
             &mut ctx,
-            VP9E_SET_ROW_MT as _,
+            vp8e_enc_control_id::VP9E_SET_ROW_MT as _,
             1 as c_int
         ));
         vpx!(vpx_codec_control_(
             &mut ctx,
-            VP9E_SET_TILE_COLUMNS as _,
+            vp8e_enc_control_id::VP9E_SET_TILE_COLUMNS as _,
             4 as c_int
         ));
         vpx!(vpx_codec_control_(
             &mut ctx,
-            VP9E_SET_MAX_INTER_BITRATE_PCT as _,
+            vp8e_enc_control_id::VP9E_SET_MAX_INTER_BITRATE_PCT as _,
             50 as c_int
         ));
         Ok(VideoEncoder {
@@ -190,7 +190,7 @@ impl<'a> Iterator for Frames<'a> {
                 let pkt = vpx_codec_get_cx_data(self.ctx, &mut self.iter);
                 if pkt.is_null() {
                     return None;
-                } else if (*pkt).kind == VPX_CODEC_CX_FRAME_PKT {
+                } else if (*pkt).kind == vpx_codec_cx_pkt_kind::VPX_CODEC_CX_FRAME_PKT {
                     let f = &(*pkt).data.frame;
                     return Some(Frame {
                         data: std::slice::from_raw_parts(f.buf as _, f.sz as usize),

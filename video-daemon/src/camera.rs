@@ -1,6 +1,6 @@
 use crate::video_encoder::Frame;
 use crate::video_encoder::VideoEncoderBuilder;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use image::RgbImage;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::RequestedFormat;
@@ -128,11 +128,15 @@ impl CameraDaemon {
                 if quit.load(std::sync::atomic::Ordering::Relaxed) {
                     return ();
                 }
-                if let Err(e) = cam_tx.try_send(Some((
-                    frame.decode_image::<RgbFormat>().unwrap(),
-                    since_the_epoch().as_millis(),
-                ))) {
-                    error!("Unable to send image: {}", e);
+                let res = frame
+                    .decode_image::<RgbFormat>()
+                    .map_err(|e| anyhow! {format!("{}", e)})
+                    .and_then(|image| {
+                        cam_tx.try_send(Some((image, since_the_epoch().as_millis())))?;
+                        Ok(())
+                    });
+                if let Err(e) = res {
+                    error!("Unable to send camera frame: {:?}", e);
                 }
             }
         }))
