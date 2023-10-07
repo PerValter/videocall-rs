@@ -3,8 +3,10 @@ resolver = "2"
 members = [
     "actix-api",
     "bot",
-    "src-tauri",
     "types",
     "video-daemon",
+]
+exclude = [
+    "src-tauri",
     "yew-ui"
 ]
